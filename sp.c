@@ -17,6 +17,39 @@
 int nr_simulated_instructions = 0;
 FILE *inst_trace_fp = NULL, *cycle_trace_fp = NULL;
 
+// HAZARD TYPES DEFINITION
+#define NO_HAZARD 0
+#define CTRL 1
+#define DATA 2
+#define STRUCT 3
+#define REG 4
+//#define CTRL_SRC0       10
+//#define CTRL_SRC1       11
+//#define DATA_SRC0       20
+//#define DATA_SRC1       21
+//#define STRUCT_SRC0     30
+//#define STRUCT_SRC1     31
+//#define REG_SRC0        40
+//#define REG_SRC1        41
+
+
+/*
+ * DMA structure
+ */
+typedef struct dma_s {
+    int src;            // source address
+    int dst;            // destination address
+    int len;            // total number of blocks to copy
+    int state;          // DMA's FSM current state
+
+    // control states
+#define DMA_STATE_IDLE		0
+#define DMA_STATE_FETCH		1
+#define DMA_STATE_WAIT	    2
+#define DMA_STATE_COPY	    3
+
+} dma_t;
+
 typedef struct sp_registers_s {
 	// 6 32 bit registers (r[0], r[1] don't exist)
 	int r[8];
@@ -87,6 +120,16 @@ typedef struct sp_s {
 	int start;
 
 	sp_registers_t *spro, *sprn;
+
+    // BEGIN
+    // DMA
+    dma_t* dma;
+
+    // DMA control signals
+    int dma_start;  // "kick" to trigger DMA activation
+    int dma_busy;   // is DMA currently busy
+    int mem_busy;   // is SRAM currently busy
+    // END
 } sp_t;
 
 static void sp_reset(sp_t *sp)
@@ -109,6 +152,10 @@ static void sp_reset(sp_t *sp)
 #define LHI 7
 #define LD 8
 #define ST 9
+// BEGIN
+#define CPY 10
+#define POL 11
+// END
 #define JLT 16
 #define JLE 17
 #define JEQ 18
@@ -120,6 +167,40 @@ static char opcode_name[32][4] = {"ADD", "SUB", "LSF", "RSF", "AND", "OR", "XOR"
 				 "LD", "ST", "U", "U", "U", "U", "U", "U",
 				 "JLT", "JLE", "JEQ", "JNE", "JIN", "U", "U", "U",
 				 "HLT", "U", "U", "U", "U", "U", "U", "U"};
+
+int btaken; // control bit to indicate if branch is taken
+
+// HAZARD CHECKING FUNCTIONS
+
+int check_hazard_dec0(sp_t *sp) {
+
+    return  0;
+}
+
+int check_hazard_dec1(sp_t *sp, int src) {
+
+    return  0;
+}
+
+int check_hazard_exec0(sp_t *sp, int src) {
+
+    return  0;
+}
+
+int check_hazard_exec1(sp_t *sp) {
+
+    return  0;
+}
+
+// stall pipeline
+void stall() {
+
+}
+
+// flush pipeline
+void flush() {
+
+}
 
 static void dump_sram(sp_t *sp, char *name, llsim_memory_t *sram)
 {
@@ -204,32 +285,257 @@ static void sp_ctl(sp_t *sp)
 	if (sp->start)
 		sprn->fetch0_active = 1;
 
-	// fetch0
+    // BEGIN
+    // fetch0
 	sprn->fetch1_active = 0;
-	if (spro->fetch0_active) {
+    if (spro->fetch0_active) {
+        llsim_mem_read(sp->srami, spro->fetch0_pc);    // read instruction @ pc
+        sprn->fetch0_pc = (spro->fetch0_pc + 1) & 0xffff;           // advance PC (and handle overflow)
+
+        sprn->fetch1_active = 1;
+        sprn->fetch1_pc = spro->fetch0_pc;
 	}
+    else {
+        sprn->fetch1_active = 0;    // propagate inactivity;
+    }
 
 	// fetch1
-	// FILL HERE
+    if (spro->fetch1_active) {
+        sprn->dec0_inst = llsim_mem_extract(sp->srami, spro->fetch1_pc, 31, 0);     // TODO
+
+        sprn->dec0_active = 1;
+        sprn->dec0_pc = spro->fetch1_pc;
+    }
+    else {
+        sprn->dec0_active = 0;    // propagate inactivity;
+    }
 	
 	// dec0
-	// FILL HERE
+    if (spro->dec0_active) {
+
+        // parse operation
+        sprn->dec1_opcode = (spro->dec0_inst >> 25) & 0x1f;
+        sprn->dec1_dst = (spro->dec0_inst >> 22) & 0x7;
+        sprn->dec1_src0 = (spro->dec0_inst >> 19) & 0x7;
+        sprn->dec1_src1 = (spro->dec0_inst >> 16) & 0x7;
+        sprn->dec1_immediate = spro->dec0_inst & 0xffff;
+
+        // sign extend immediate
+        sprn->dec1_immediate += (int)((sprn->dec1_immediate & 0x8000) ? 0xffff0000 : 0x0);
+
+        sprn->dec1_inst = spro->dec0_inst;
+
+        sprn->dec1_active = 1;
+        sprn->dec1_pc = spro->dec0_pc;
+    }
+    else {
+        sprn->dec1_active = 0;
+    }
 
 	// dec1
-	// FILL HERE
+    if (spro->dec1_active) {
+
+        switch (spro->dec1_src0) {
+            case 0:
+                sprn->exec0_alu0 = 0;
+                break;
+            case 1:
+                sprn->exec0_alu0 = spro->dec1_immediate;
+                break;
+            default:
+                switch (check_hazard_dec1(sp, 0)) {
+                    case NO_HAZARD:
+                        sprn->exec0_alu0 = spro->r[spro->dec1_src0];
+                        break;
+                    case CTRL:
+                        break;
+                    case DATA:
+                        break;
+                    case STRUCT:
+                        break;
+                    case REG:
+                        break;
+                }
+                break;
+        }
+
+        switch (spro->dec1_src1) {
+            case 0:
+                sprn->exec0_alu1 = 0;
+                break;
+            case 1:
+                sprn->exec0_alu1 = spro->dec1_immediate;
+                break;
+            default:
+                switch (check_hazard_dec1(sp, 1)) {
+                    case NO_HAZARD:
+                        sprn->exec0_alu1 = spro->r[spro->dec1_src1];
+                        break;
+                    case CTRL:
+                        break;
+                    case DATA:
+                        break;
+                    case STRUCT:
+                        break;
+                    case REG:
+                        break;
+                }
+                break;
+        }
+
+
+        sprn->exec0_pc = spro->dec1_pc;
+        sprn->exec0_inst = spro->dec1_inst;
+        sprn->exec0_opcode = spro->dec1_opcode;
+        sprn->exec0_dst = spro->dec1_dst;
+        sprn->exec0_src0 = spro->dec1_src0;
+        sprn->exec0_src1 = spro->dec1_src1;
+        sprn->exec0_immediate = spro->dec1_immediate;
+        sprn->exec0_active = 1;
+
+
+    }
+    else {
+        sprn->exec0_active = 0;
+    }
 
 	// exec0
-	// FILL HERE
+    if (spro->exec0_active) {
+        int alu0 = spro->exec0_alu0, alu1 = spro->exec0_alu1;
+
+        switch (spro->exec0_src0) {
+            case 0:
+            case 1:
+                break;
+            // src in [2..7]
+            default:
+                switch (check_hazard_exec0(sp, 0)) {
+
+                }
+                break;
+        }
+
+        switch (spro->exec0_src1) {
+            case 0:
+            case 1:
+                break;
+                // src in [2..7]
+            default:
+                switch (check_hazard_exec0(sp, 1)) {
+
+                }
+                break;
+        }
+
+        switch (spro->exec0_opcode) {
+            case ADD:
+                sprn->exec1_aluout = alu0 + alu1;
+                break;
+            case SUB:
+                sprn->exec1_aluout = alu0 - alu1;
+                break;
+            case LSF:
+                sprn->exec1_aluout = alu0 << alu1;
+                break;
+            case RSF:
+                sprn->exec1_aluout = alu0 >> alu1;
+                break;
+            case AND:
+                sprn->exec1_aluout = alu0 & alu1;
+                break;
+            case OR:
+                sprn->exec1_aluout = alu0 | alu1;
+                break;
+            case XOR:
+                sprn->exec1_aluout = alu0 ^ alu1;
+                break;
+            case LHI:
+                sprn->exec1_aluout = (alu0 & 0xffff) | (alu1 << 16);
+                break;
+            case LD:
+                llsim_mem_read(sp->sramd, alu1);
+                break;
+            case ST:
+                break;
+            case JLT:
+                sprn->exec1_aluout = (alu0 < alu1) ? 1 : 0;
+                break;
+            case JLE:
+                sprn->exec1_aluout = (alu0 <= alu1) ? 1 : 0;
+                break;
+            case JEQ:
+                sprn->exec1_aluout = (alu0 == alu1) ? 1 : 0;
+                break;
+            case JNE:
+                sprn->exec1_aluout = (alu0 != alu1) ? 1 : 0;
+                break;
+            case JIN:
+                sprn->exec1_aluout = 1;
+                break;
+            case HLT:
+                break;
+
+        }
+
+        sprn->exec1_pc = spro->exec0_pc;
+        sprn->exec1_inst = spro->exec0_inst;
+        sprn->exec1_opcode = spro->exec0_opcode;
+        sprn->exec1_dst = spro->exec0_dst;
+        sprn->exec1_src0 = spro->exec0_src0;
+        sprn->exec1_src1 = spro->exec0_src1;
+        sprn->exec1_immediate = spro->exec0_immediate;
+
+        sprn->exec1_alu0 = alu0;
+        sprn->exec1_alu1 = alu1;
+
+        sprn->exec1_active = 1;
+    }
+    else {
+        sprn->exec1_active = 0;
+    }
 
 	// exec1
 	if (spro->exec1_active) {
-		// FILL HERE
-		if (spro->exec1_opcode == HLT) {
+        if (spro->exec1_opcode == HLT) {
 			llsim_stop();
 			dump_sram(sp, "srami_out.txt", sp->srami);
 			dump_sram(sp, "sramd_out.txt", sp->sramd);
 		}
-	}
+        else {
+            switch (spro->exec1_opcode) {
+                case ADD:
+                case SUB:
+                case LSF:
+                case RSF:
+                case AND:
+                case OR:
+                case XOR:
+                case LHI:
+                    sprn->r[spro->exec1_dst] = spro->exec1_aluout;
+                    break;
+                case LD:
+                    sprn->r[spro->exec1_dst] =  llsim_mem_extract(sp->sramd, spro->exec1_alu1, 31, 0);
+                    break;
+                case ST:
+                    llsim_mem_set_datain(sp->sramd, spro->exec1_alu0, 31, 0);
+                    llsim_mem_write(sp->sramd, spro->exec1_alu1);
+                    break;
+                case JLT:
+                case JLE:
+                case JEQ:
+                case JNE:
+                case JIN:
+                    if (spro->exec1_aluout == 1) {
+                        btaken = 1;
+//                        sprn->pc = spro->immediate;
+                        sprn->r[7] = spro->exec1_pc;
+                    }
+                    break;
+                // HLT already taken care of in provided code
+            }
+	    }
+    }
+    // END
 }
 
 static void sp_run(llsim_unit_t *unit)
