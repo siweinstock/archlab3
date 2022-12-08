@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
-#include <sys/types.h> 
+#include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 
@@ -456,7 +456,6 @@ static void sp_ctl(sp_t *sp)
     // fetch0
 	sprn->fetch1_active = 0;
     if (spro->fetch0_active) {
-        // TODO: add mem read in case of branch ?
         llsim_mem_read(sp->srami, spro->fetch0_pc);    // read instruction @ pc
         sprn->fetch0_pc = (spro->fetch0_pc + 1) & 0xffff;           // advance PC (and handle overflow)
 
