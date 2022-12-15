@@ -169,7 +169,6 @@ static char opcode_name[32][4] = {"ADD", "SUB", "LSF", "RSF", "AND", "OR", "XOR"
 				 "JLT", "JLE", "JEQ", "JNE", "JIN", "U", "U", "U",
 				 "HLT", "U", "U", "U", "U", "U", "U", "U"};
 
-//int btaken; // control bit to indicate if branch is taken
 
 // command classification macros
 #define IS_ALU(opcode) ((opcode) == ADD || (opcode) == SUB || (opcode) == LSF || (opcode) == RSF || (opcode) == AND || (opcode) == OR || (opcode) == XOR || (opcode) == LHI)
@@ -186,7 +185,6 @@ int check_hazard_dec0(sp_t *sp) {
     if (spro->dec1_active && spro->dec1_opcode == ST && ((spro->dec0_inst >> 25) & 0x1f) == LD) {
         return DATA_HAZARD;
     }
-
     return NO_HAZARD;
 }
 
@@ -228,7 +226,6 @@ int check_hazard_dec1(sp_t *sp, int src) {
             // unreachable
             break;
     }
-
     return NO_HAZARD;
 }
 
@@ -238,22 +235,22 @@ int check_hazard_exec0(sp_t *sp, int src) {
 
     switch (src) {
         case 0:
-            if (spro->exec1_active && spro->exec0_src0 == 7 && ((IS_COND_BRANCH(spro->exec0_opcode) && spro->exec1_aluout) ||
-                    IS_UNCOND_BRANCH(spro->exec0_opcode)) && spro->exec0_src0 > 1) {
+            if (spro->exec1_active && spro->exec0_src0 == 7 && ((IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout) ||
+                    IS_UNCOND_BRANCH(spro->exec1_opcode)) && spro->exec0_src0 > 1) {
                 return CTRL_HAZARD;
             }
             else if (spro->exec1_active && (IS_ALU(spro->exec1_opcode) || IS_DMA(spro->exec1_opcode)) &&
-                    spro->exec1_dst == spro->exec1_src0  && spro->exec0_src0 > 1) {
+                    spro->exec1_dst == spro->exec0_src0  && spro->exec0_src0 > 1) {
                 return REG_HAZARD;
             }
             break;
         case 1:
-            if (spro->exec1_active && spro->exec0_src1 == 7 && ((IS_COND_BRANCH(spro->exec0_opcode) && spro->exec1_aluout) ||
-                    IS_UNCOND_BRANCH(spro->exec0_opcode)) && spro->exec0_src1 > 1) {
+            if (spro->exec1_active && spro->exec0_src1 == 7 && ((IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout) ||
+                    IS_UNCOND_BRANCH(spro->exec1_opcode)) && spro->exec0_src1 > 1) {
                 return CTRL_HAZARD;
             }
             else if (spro->exec1_active && (IS_ALU(spro->exec1_opcode) || IS_DMA(spro->exec1_opcode)) &&
-                     spro->exec1_dst == spro->exec1_src1  && spro->exec0_src1 > 1) {
+                     spro->exec1_dst == spro->exec0_src1  && spro->exec0_src1 > 1) {
                 return REG_HAZARD;
             }
             break;
@@ -261,18 +258,10 @@ int check_hazard_exec0(sp_t *sp, int src) {
             // unreachable
             break;
     }
-
-    return  NO_HAZARD;
-}
-
-// TODO
-int check_hazard_exec1(sp_t *sp, int src) {
-
     return  NO_HAZARD;
 }
 
 // stall pipeline
-// TODO
 void stall(sp_t *sp, int stage) {
     sp_registers_t *spro = sp->spro;
     sp_registers_t *sprn = sp->sprn;
@@ -281,7 +270,7 @@ void stall(sp_t *sp, int stage) {
         case DEC1:
             sprn->exec1_active = 0;
 
-            sprn->exec0_active = 0;
+            sprn->exec0_active = 1;
             sprn->exec0_pc = 0;
             sprn->exec0_inst = 0;
             sprn->exec0_opcode = NOP;
@@ -322,21 +311,41 @@ void stall(sp_t *sp, int stage) {
 
             sprn->dec1_active = 0;
             break;
+
+        default:
+            break;
     }
 
 }
 
 // flush pipeline and load correct instruction
-void flush(sp_t *sp, int pc) {
+void flush(sp_t *sp, int stage, int pc) {
     sp_registers_t *sprn = sp->sprn;
+    sp_registers_t *spro = sp->spro;
 
-    sprn->exec1_active = 0;
-    sprn->exec0_active = 0;
-    sprn->dec1_active = 0;
-    sprn->dec0_active = 0;
-    sprn->fetch1_active = 0;
-    sprn->fetch0_active = 1;
-    sprn->fetch0_pc = pc;
+    switch (stage) {
+        case DEC0:
+            sprn->fetch0_active = 1;
+            sprn->fetch0_pc = pc;
+            sprn->fetch1_active = 0;
+            sprn->dec0_active = 0;
+            break;
+
+        case EXEC1:
+            sprn->exec1_active = 0;
+            sprn->exec0_active = 0;
+            sprn->dec1_active = 0;
+            sprn->dec0_active = 0;
+            sprn->fetch1_active = 0;
+            sprn->fetch0_active = 1;
+            sprn->fetch0_pc = pc;
+            break;
+
+        default:
+            break;
+
+    }
+
 }
 
 // branch predictor
@@ -347,6 +356,9 @@ void predict_branch(sp_t *sp) {
     int pc;
 
     if (IS_COND_BRANCH(spro->exec1_opcode)) {
+        if (spro->exec1_aluout)
+            sprn->r[7] = spro->exec1_pc;
+
         // update pc and branch counter: (taken ? Yes : No);
         // MIN and MAX to prevent a 2-bit overflow
         pc = spro->exec1_aluout ? (spro->exec1_immediate & 0xffff) : spro->exec1_pc + 1;
@@ -355,16 +367,15 @@ void predict_branch(sp_t *sp) {
     // JIN
     else {
         sprn->r[7] = spro->exec1_pc;
-        pc = spro->exec0_alu0 & 0xffff;
+        pc = spro->exec1_alu0 & 0xffff;
     }
 
     if ((spro->fetch0_active && (spro->fetch0_pc != pc)) ||
         (spro->fetch1_active && (spro->fetch1_pc != pc)) ||
         (spro->dec0_active && (spro->dec0_pc != pc)) ||
-        (spro->dec1_active && (spro->dec1_active != pc)) ||
-        (spro->exec0_active && (spro->exec0_pc != pc)) ||
-        (spro->exec1_active && (spro->exec1_active != pc))) {
-        flush(sp, pc);
+        (spro->dec1_active && (spro->dec1_pc != pc)) ||
+        (spro->exec0_active && (spro->exec0_pc != pc))) {
+        flush(sp, EXEC1, pc);
     }
 
 }
@@ -463,7 +474,7 @@ static void sp_ctl(sp_t *sp)
         sprn->fetch1_pc = spro->fetch0_pc;
 	}
     else {
-        sprn->fetch1_active = 0;    // propagate inactivity;
+        sprn->fetch1_active = 0;    // propagate inactivity
     }
 
 	// fetch1
@@ -481,15 +492,14 @@ static void sp_ctl(sp_t *sp)
     if (spro->dec0_active) {
         // branch prediction is 'taken'
         if (IS_COND_BRANCH((spro->dec0_inst >> 25) & 0x1f) && branch_counter > 1) {
-            flush(sp, (spro->dec0_inst & 0xffff));  // TODO
+            flush(sp, DEC0, (spro->dec0_inst & 0xffff));
         }
 
         // check for RAW hazard
         switch (check_hazard_dec0(sp)) {
             // if RAW then stall command
             case DATA_HAZARD:
-                stall(sp);  // TODO !
-                sprn->dec1_active = 0;
+                stall(sp, DEC0);
                 break;
 
             // if no hazard continue as usual
@@ -507,6 +517,7 @@ static void sp_ctl(sp_t *sp)
                 sprn->dec1_inst = spro->dec0_inst;
                 sprn->dec1_active = 1;
                 sprn->dec1_pc = spro->dec0_pc;
+                break;
         }
     }
     else {
@@ -516,17 +527,18 @@ static void sp_ctl(sp_t *sp)
 	// dec1
     if (spro->dec1_active) {
 
-        // TODO: check for RAW and stall if necessary?
+        // check for RAW and stall if necessary
         if (check_hazard_dec1(sp, 0) == DATA_STALL || check_hazard_dec1(sp, 1) == DATA_STALL) {
-            stall(sp);
+            stall(sp, DEC1);
         }
-        // TODO: check for hazards that can be solved using bypasses?
+        // check for hazards that can be solved using bypasses
         else {
             switch (spro->dec1_src0) {
                 case 0:
                     sprn->exec0_alu0 = 0;
                     break;
                 case 1:
+                    sprn->r[1] = spro->dec1_immediate;
                     sprn->exec0_alu0 = spro->dec1_immediate;
                     break;
                     // [2..7]
@@ -553,6 +565,7 @@ static void sp_ctl(sp_t *sp)
                     sprn->exec0_alu1 = 0;
                     break;
                 case 1:
+                    sprn->r[1] = spro->dec1_immediate;
                     sprn->exec0_alu1 = spro->dec1_immediate;
                     break;
                     // [2..7]
@@ -575,7 +588,6 @@ static void sp_ctl(sp_t *sp)
             }
         }
 
-
         sprn->exec0_pc = spro->dec1_pc;
         sprn->exec0_inst = spro->dec1_inst;
         sprn->exec0_opcode = spro->dec1_opcode;
@@ -584,8 +596,6 @@ static void sp_ctl(sp_t *sp)
         sprn->exec0_src1 = spro->dec1_src1;
         sprn->exec0_immediate = spro->dec1_immediate;
         sprn->exec0_active = 1;
-
-
     }
     else {
         sprn->exec0_active = 0;
@@ -596,7 +606,7 @@ static void sp_ctl(sp_t *sp)
         int alu0 = spro->exec0_alu0, alu1 = spro->exec0_alu1;
 
         // if stall, then preserve state
-        if (spro->exec0_opcode == NOP) {    // TODO
+        if (spro->exec0_opcode == NOP) {
             sprn->exec1_pc = spro->exec1_pc;
             sprn->exec1_inst = spro->exec1_inst;
             sprn->exec1_opcode = spro->exec1_opcode;
@@ -731,10 +741,12 @@ static void sp_ctl(sp_t *sp)
                 case OR:
                 case XOR:
                 case LHI:
-                    sprn->r[spro->exec1_dst] = spro->exec1_aluout;
+                    if (spro->exec1_dst > 1)
+                        sprn->r[spro->exec1_dst] = spro->exec1_aluout;
                     break;
                 case LD:
-                    sprn->r[spro->exec1_dst] =  llsim_mem_extract(sp->sramd, spro->exec1_alu1, 31, 0);
+                    if (spro->exec1_dst > 1)
+                        sprn->r[spro->exec1_dst] =  llsim_mem_extract(sp->sramd, spro->exec1_alu1, 31, 0);
                     break;
                 case ST:
                     llsim_mem_set_datain(sp->sramd, spro->exec1_alu0, 31, 0);
@@ -746,11 +758,6 @@ static void sp_ctl(sp_t *sp)
                 case JNE:
                 case JIN:
                     predict_branch(sp);
-//                    if (spro->exec1_aluout == 1) {
-//                        btaken = 1;
-//                        sprn->pc = spro->immediate;
-//                        sprn->r[7] = spro->exec1_pc;
-//                    }
                     break;
                 // HLT already taken care of in provided code
             }
