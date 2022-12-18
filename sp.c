@@ -29,6 +29,7 @@ int branch_counter = 0;     // simple 2-bit branch predictor
 #define REG_HAZARD 4
 #define DATA_STALL 5
 
+// pipeline stages
 #define FETCH0  0
 #define FETCH1  1
 #define DEC0    2
@@ -36,6 +37,7 @@ int branch_counter = 0;     // simple 2-bit branch predictor
 #define EXEC0   4
 #define EXEC1   5
 
+// DMA states
 #define DMA_STATE_IDLE     0
 #define DMA_STATE_FETCH    1
 #define DMA_STATE_COPY     2
@@ -98,11 +100,11 @@ typedef struct sp_registers_s {
     int exec1_aluout;
 
     // DMA
-    int dma_busy;
-    int dma_src;
-    int dma_dst;
-    int dma_len;
-    int dma_state;
+    int dma_busy;   // is DMA currently in use
+    int dma_src;    // DMA source address
+    int dma_dst;    // DMA destination address
+    int dma_len;    // amount to copy
+    int dma_state;  // DMA current state in FSM
 
 } sp_registers_t;
 
@@ -165,68 +167,81 @@ static char opcode_name[32][4] = {"ADD", "SUB", "LSF", "RSF", "AND", "OR", "XOR"
 
 // command classification macros
 #define IS_ALU(opcode) ((opcode) == ADD || (opcode) == SUB || (opcode) == LSF || (opcode) == RSF || (opcode) == AND || (opcode) == OR || (opcode) == XOR || (opcode) == LHI || (opcode) == POL)
-#define IS_DMA(opcode) ((opcode) == CPY ||(opcode) == POL)
 #define  IS_COND_BRANCH(opcode) ((opcode) == JLT || (opcode) == JLE || (opcode) == JEQ || (opcode) == JNE)
 #define  IS_UNCOND_BRANCH(opcode) ((opcode) == JIN)
-#define IS_BRANCH(opcode) (IS_COND_BRANCH((opcode)) || (opcode) == JIN)
 
 // HAZARD CHECKING FUNCTIONS
 
+// check for possible hazards in DEC0 stage
 int check_hazard_dec0(sp_t *sp) {
     sp_registers_t *spro = sp->spro;
 
+    // hazard if store command followed by load command
     if (spro->dec1_active && spro->dec1_opcode == ST && ((spro->dec0_inst >> 25) & 0x1f) == LD) {
         return DATA_HAZARD;
     }
     return NO_HAZARD;
 }
 
+// check for possible hazards in DEC1 stage for given src (0 or 1)
 int check_hazard_dec1(sp_t *sp, int src) {
     sp_registers_t *spro = sp->spro;
 
     switch (src) {
+        // src0
         case 0:
+            // if load at EXEC0 into register being read, stall
             if (spro->exec0_active && spro->exec0_opcode == LD && spro->exec0_dst == spro->dec1_src0 && spro->dec1_src0 > 1) {
                 return DATA_STALL;
             }
-
+            // if branch and src is r[7] (being overwritten with PC), bypass
             if (spro->exec1_active && spro->dec1_src0 == 7 && (spro->exec1_opcode == JIN || IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout)) {
                 return CTRL_HAZARD;
             }
+            // if load at EXEC1 into register being read, can bypass
             else if (spro->exec1_active && spro->exec1_opcode == LD && spro->exec1_dst == spro->dec1_src0) {
                 return DATA_HAZARD;
             }
+            // if ALU command write into src register, bypass
             else if (spro->exec1_active && (IS_ALU(spro->exec1_opcode)) && spro->exec1_dst == spro->dec1_src0) {
                 return REG_HAZARD;
             }
             break;
+        // src1
         case 1:
+            // if load into register being read, stall
             if (spro->exec0_active && spro->exec0_opcode == LD && spro->exec0_dst == spro->dec1_src1 && spro->dec1_src1 > 1) {
                 return DATA_STALL;
             }
-
+            // if branch and src is r[7] (being overwritten with PC), bypass
             if (spro->exec1_active && spro->dec1_src1 == 7 && (spro->exec1_opcode == JIN || IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout)) {
                 return CTRL_HAZARD;
             }
+            // if load at EXEC1 into register being read, can bypass
             else if (spro->exec1_active && spro->exec1_opcode == LD && spro->exec1_dst == spro->dec1_src1) {
                 return DATA_HAZARD;
             }
+            // if ALU command write into src register, bypass
             else if (spro->exec1_active && (IS_ALU(spro->exec1_opcode)) && spro->exec1_dst == spro->dec1_src1) {
                 return REG_HAZARD;
             }
             break;
+        // invalid source
         default:
-            // unreachable
             break;
     }
+    // none of the above, all good
     return NO_HAZARD;
 }
 
+// check for possible hazards in EXEC0 stage for given src (0 or 1)
 int check_hazard_exec0(sp_t *sp, int src) {
     sp_registers_t *spro = sp->spro;
 
     switch (src) {
+        // src0
         case 0:
+            // if branch and src is r[7] (being overwritten with PC), bypass
             if (spro->exec1_active && spro->exec0_src0 == 7 && ((IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout) ||
                                                                 IS_UNCOND_BRANCH(spro->exec1_opcode)) && spro->exec0_src0 > 1) {
                 return CTRL_HAZARD;
@@ -236,7 +251,9 @@ int check_hazard_exec0(sp_t *sp, int src) {
                 return REG_HAZARD;
             }
             break;
+        // src1
         case 1:
+            // if branch and src is r[7] (being overwritten with PC), bypass
             if (spro->exec1_active && spro->exec0_src1 == 7 && ((IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout) ||
                                                                 IS_UNCOND_BRANCH(spro->exec1_opcode)) && spro->exec0_src1 > 1) {
                 return CTRL_HAZARD;
@@ -246,19 +263,21 @@ int check_hazard_exec0(sp_t *sp, int src) {
                 return REG_HAZARD;
             }
             break;
+        // invalid src
         default:
-            // unreachable
             break;
     }
+    // none of the above, all good
     return  NO_HAZARD;
 }
 
-// stall pipeline
+// stall pipeline at given stage where hazard occurred
 void stall(sp_t *sp, int stage) {
     sp_registers_t *spro = sp->spro;
     sp_registers_t *sprn = sp->sprn;
 
     switch (stage) {
+        // replace command with NOP
         case DEC1:
             sprn->exec1_active = 0;
 
@@ -291,6 +310,7 @@ void stall(sp_t *sp, int stage) {
             sprn->dec1_immediate = spro->dec1_immediate;
             break;
 
+        // freeze pipeline for 1 cycle
         case DEC0:
             sprn->fetch0_active = spro->fetch1_active;
             sprn->fetch0_pc = spro->fetch1_pc;
@@ -304,6 +324,7 @@ void stall(sp_t *sp, int stage) {
             sprn->dec1_active = 0;
             break;
 
+        // invalid pipeline stage
         default:
             break;
     }
@@ -316,6 +337,7 @@ void flush(sp_t *sp, int stage, int pc) {
     sp_registers_t *spro = sp->spro;
 
     switch (stage) {
+        // flush pipeline and fetch from PC
         case DEC0:
             sprn->fetch0_active = 1;
             sprn->fetch0_pc = pc;
@@ -323,6 +345,7 @@ void flush(sp_t *sp, int stage, int pc) {
             sprn->dec0_active = 0;
             break;
 
+        // flush pipeline and fetch from PC
         case EXEC1:
             sprn->exec1_active = 0;
             sprn->exec0_active = 0;
@@ -347,7 +370,9 @@ void predict_branch(sp_t *sp) {
 
     int pc;
 
+    // update branch predictor in case of conditional branch
     if (IS_COND_BRANCH(spro->exec1_opcode)) {
+        // update r[7] upon branch taken
         if (spro->exec1_aluout)
             sprn->r[7] = spro->exec1_pc;
 
@@ -356,12 +381,13 @@ void predict_branch(sp_t *sp) {
         pc = spro->exec1_aluout ? (spro->exec1_immediate & 0xffff) : spro->exec1_pc + 1;
         branch_counter = spro->exec1_aluout ? MAX(3, branch_counter+1) : MIN(0, branch_counter-1);
     }
-        // JIN
+    // JIN
     else {
         sprn->r[7] = spro->exec1_pc;
         pc = spro->exec1_alu0 & 0xffff;
     }
 
+    // if branch is taken pipeline has to be flushed and fetch instruction from correct address
     if ((spro->fetch0_active && (spro->fetch0_pc != pc)) ||
         (spro->fetch1_active && (spro->fetch1_pc != pc)) ||
         (spro->dec0_active && (spro->dec0_pc != pc)) ||
@@ -388,36 +414,39 @@ static void dump_sram(sp_t *sp, char *name, llsim_memory_t *sram)
     fclose(fp);
 }
 
-
+// state machine for DMA
 void dma_ctl(sp_t *sp) {
     sp_registers_t* spro = sp->spro;
     sp_registers_t* sprn = sp->sprn;
-
 
     int dataout;
 
     switch (spro->dma_state) {
         case DMA_STATE_IDLE:
             sprn->dma_busy = 0;
+
+            // if DMA command then set busy and goto next state
             if (sp->dma_start) {
                 sprn->dma_state = DMA_STATE_FETCH;
                 sprn->dma_busy = 1;
             }
             break;
+
         case DMA_STATE_FETCH:
             // read next address if SRAM is free
             if (!sp->mem_busy){
                 llsim_mem_read(sp->sramd, spro->dma_src);
             }
 
-
             // proceed to next state (WAIT if SRAM is busy otherwise COPY)
             sprn->dma_state = (sp->mem_busy ? DMA_STATE_WAIT : DMA_STATE_COPY);
             break;
+
         case DMA_STATE_WAIT:
             // proceed to next state (WAIT if SRAM is still busy, otherwise FETCH)
             sprn->dma_state = (sp->mem_busy ? DMA_STATE_WAIT : DMA_STATE_FETCH);
             break;
+
         case DMA_STATE_COPY:
             // copy current address from SRAM to DMA's destination
             dataout = llsim_mem_extract(sp->sramd, spro->dma_src, 31, 0);
@@ -516,6 +545,7 @@ static void sp_ctl(sp_t *sp)
         llsim_mem_read(sp->srami, spro->fetch0_pc);    // read instruction @ pc
         sprn->fetch0_pc = (spro->fetch0_pc + 1) & 0xffff;           // advance PC (and handle overflow)
 
+        // update micro architecture registers
         sprn->fetch1_active = 1;
         sprn->fetch1_pc = spro->fetch0_pc;
     }
@@ -527,6 +557,7 @@ static void sp_ctl(sp_t *sp)
     if (spro->fetch1_active) {
         sprn->dec0_inst = llsim_mem_extract(sp->srami, spro->fetch1_pc, 31, 0);
 
+        // update micro architecture registers
         sprn->dec0_active = 1;
         sprn->dec0_pc = spro->fetch1_pc;
     }
@@ -560,6 +591,7 @@ static void sp_ctl(sp_t *sp)
                 // sign extend immediate
                 sprn->dec1_immediate += (int)((sprn->dec1_immediate & 0x8000) ? 0xffff0000 : 0x0);
 
+                // update micro architecture registers
                 sprn->dec1_inst = spro->dec0_inst;
                 sprn->dec1_active = 1;
                 sprn->dec1_pc = spro->dec0_pc;
@@ -577,28 +609,35 @@ static void sp_ctl(sp_t *sp)
         if (check_hazard_dec1(sp, 0) == DATA_STALL || check_hazard_dec1(sp, 1) == DATA_STALL) {
             stall(sp, DEC1);
         }
-            // check for hazards that can be solved using bypasses
+        // check for hazards that can be solved using bypasses
         else {
             switch (spro->dec1_src0) {
+                // r[0] is always 0
                 case 0:
                     sprn->exec0_alu0 = 0;
                     break;
+                // r[1] is immediate
                 case 1:
                     sprn->r[1] = spro->dec1_immediate;
                     sprn->exec0_alu0 = spro->dec1_immediate;
                     break;
-                    // [2..7]
+                // src0 is r[2] to r[7]
                 default:
+                    // check for hazard
                     switch (check_hazard_dec1(sp, 0)) {
+                        // no hazard, continue as usual
                         case NO_HAZARD:
                             sprn->exec0_alu0 = spro->r[spro->dec1_src0];
                             break;
+                        // control hazard, bypass PC
                         case CTRL_HAZARD:
                             sprn->exec0_alu0 = spro->exec1_pc;
                             break;
+                        // data hazard, bypass loaded value
                         case DATA_HAZARD:
                             sprn->exec0_alu0 = llsim_mem_extract_dataout(sp->sramd, 31, 0);
                             break;
+                        // reg value hazard, bypass result
                         case REG_HAZARD:
                             sprn->exec0_alu0 = spro->exec1_aluout;
                             break;
@@ -607,25 +646,32 @@ static void sp_ctl(sp_t *sp)
             }
 
             switch (spro->dec1_src1) {
+                // r[0] is always 0
                 case 0:
                     sprn->exec0_alu1 = 0;
                     break;
+                // r[1] is immediate
                 case 1:
                     sprn->r[1] = spro->dec1_immediate;
                     sprn->exec0_alu1 = spro->dec1_immediate;
                     break;
-                    // [2..7]
+                // src1 is r[2] to r[7]
                 default:
+                    // check for hazard
                     switch (check_hazard_dec1(sp, 1)) {
+                        // no hazard, continue as usual
                         case NO_HAZARD:
                             sprn->exec0_alu1 = spro->r[spro->dec1_src1];
                             break;
+                        // control hazard, bypass PC
                         case CTRL_HAZARD:
                             sprn->exec0_alu1 = spro->exec1_pc;
                             break;
+                        // data hazard, bypass loaded value
                         case DATA_HAZARD:
                             sprn->exec0_alu1 = llsim_mem_extract_dataout(sp->sramd, 31, 0);
                             break;
+                        // reg value hazard, bypass result
                         case REG_HAZARD:
                             sprn->exec0_alu1 = spro->exec1_aluout;
                             break;
@@ -634,6 +680,7 @@ static void sp_ctl(sp_t *sp)
             }
         }
 
+        // update micro architecture registers
         sprn->exec0_pc = spro->dec1_pc;
         sprn->exec0_inst = spro->dec1_inst;
         sprn->exec0_opcode = spro->dec1_opcode;
@@ -669,15 +716,18 @@ static void sp_ctl(sp_t *sp)
             // if not in a stall resume operation
         else {
             switch (spro->exec0_src0) {
+                // if r[0] or r[1] do nothing
                 case 0:
                 case 1:
                     break;
-                    // src in [2..7]
+                // if r[2]-r[7] check hazard
                 default:
                     switch (check_hazard_exec0(sp, 0)) {
+                        // control hazard, bypass PC
                         case CTRL_HAZARD:
                             alu0 = spro->exec1_pc;
                             break;
+                        // reg value hazard, bypass result
                         case REG_HAZARD:
                             alu0 = spro->exec1_aluout;
                             break;
@@ -686,15 +736,18 @@ static void sp_ctl(sp_t *sp)
             }
 
             switch (spro->exec0_src1) {
+                // if r[0] or r[1] do nothing
                 case 0:
                 case 1:
                     break;
-                    // src in [2..7]
+                // if r[2]-r[7] check hazard
                 default:
                     switch (check_hazard_exec0(sp, 1)) {
+                        // control hazard, bypass PC
                         case CTRL_HAZARD:
                             alu1 = spro->exec1_pc;
                             break;
+                        // reg value hazard, bypass result
                         case REG_HAZARD:
                             alu1 = spro->exec1_aluout;
                             break;
@@ -702,6 +755,7 @@ static void sp_ctl(sp_t *sp)
                     break;
             }
 
+            // execute operation
             switch (spro->exec0_opcode) {
                 case ADD:
                     sprn->exec1_aluout = alu0 + alu1;
@@ -738,6 +792,7 @@ static void sp_ctl(sp_t *sp)
                     sprn->dma_len = spro->exec1_alu1;
                     break;
                 case POL:
+                    // POL is 1 if DMA is in use or CPY command issued
                     sprn->exec1_aluout = ((spro->exec1_active && spro->exec1_opcode == CPY) || spro->dma_busy);
                 case JLT:
                     sprn->exec1_aluout = (alu0 < alu1) ? 1 : 0;
@@ -759,6 +814,7 @@ static void sp_ctl(sp_t *sp)
 
             }
 
+            // update micro architecture registers
             sprn->exec1_pc = spro->exec0_pc;
             sprn->exec1_inst = spro->exec0_inst;
             sprn->exec1_opcode = spro->exec0_opcode;
@@ -807,10 +863,12 @@ static void sp_ctl(sp_t *sp)
                     llsim_mem_write(sp->sramd, spro->exec1_alu1);
                     break;
                 case CPY:
+                    // if DMA is not in use mark as busy
                     if (!sp->dma_start) {
                         sp->dma_start = 1;
                     }
 
+                    // set registers
                     sprn->dma_dst = spro->r[spro->exec1_dst];
                     sprn->dma_src = spro->exec1_alu0;
                     sprn->dma_len = spro->exec1_alu1;
@@ -829,6 +887,7 @@ static void sp_ctl(sp_t *sp)
     }
 
     // DMA
+    // if LS or ST command anywhere in pipeline then memory is in use
     if ((sprn->dec1_opcode == LD)  || (sprn->dec1_opcode == ST)  ||
         (sprn->exec0_opcode == LD) || (sprn->exec0_opcode == ST) ||
         (sprn->exec1_opcode == LD) || (sprn->exec1_opcode == ST)) {
@@ -838,6 +897,7 @@ static void sp_ctl(sp_t *sp)
         sp->mem_busy = 0;
     }
 
+    // run DMA
     dma_ctl(sp);
 }
 
