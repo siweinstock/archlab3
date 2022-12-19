@@ -17,6 +17,8 @@
 int nr_simulated_instructions = 0;
 FILE *inst_trace_fp = NULL, *cycle_trace_fp = NULL;
 
+// our code BEGIN
+
 // branch prediction
 int branch_counter = 0;     // simple 2-bit branch predictor
 #define MIN(X, Y) (((X) < (Y)) ? (X) : (Y))
@@ -43,6 +45,7 @@ int branch_counter = 0;     // simple 2-bit branch predictor
 #define DMA_STATE_COPY     2
 #define DMA_STATE_WAIT     3
 
+// our code END
 
 typedef struct sp_registers_s {
     // 6 32 bit registers (r[0], r[1] don't exist)
@@ -99,12 +102,16 @@ typedef struct sp_registers_s {
     int exec1_alu1; // 32 bits
     int exec1_aluout;
 
+    // our code BEGIN
+
     // DMA
     int dma_busy;   // is DMA currently in use
     int dma_src;    // DMA source address
     int dma_dst;    // DMA destination address
     int dma_len;    // amount to copy
     int dma_state;  // DMA current state in FSM
+
+    // our code END
 
 } sp_registers_t;
 
@@ -123,9 +130,13 @@ typedef struct sp_s {
 
     sp_registers_t *spro, *sprn;
 
+    // our code BEGIN
+
     // DMA control signals
     int dma_start;  // "kick" to trigger DMA activation
     int mem_busy;   // is SRAM currently busy
+
+    // our code END
 
 } sp_t;
 
@@ -149,9 +160,11 @@ static void sp_reset(sp_t *sp)
 #define LHI 7
 #define LD 8
 #define ST 9
+// our code BEGIN
 #define CPY 10
 #define POL 11
 #define NOP 12
+// our code END
 #define JLT 16
 #define JLE 17
 #define JEQ 18
@@ -165,6 +178,7 @@ static char opcode_name[32][4] = {"ADD", "SUB", "LSF", "RSF", "AND", "OR", "XOR"
                                   "HLT", "U", "U", "U", "U", "U", "U", "U"};
 
 
+// our code BEGIN
 // command classification macros
 #define IS_ALU(opcode) ((opcode) == ADD || (opcode) == SUB || (opcode) == LSF || (opcode) == RSF || (opcode) == AND || (opcode) == OR || (opcode) == XOR || (opcode) == LHI || (opcode) == POL)
 #define  IS_COND_BRANCH(opcode) ((opcode) == JLT || (opcode) == JLE || (opcode) == JEQ || (opcode) == JNE)
@@ -459,7 +473,7 @@ void print_trace(sp_t *sp) {
             break;
     }
 }
-
+// our code END
 
 static void dump_sram(sp_t *sp, char *name, llsim_memory_t *sram)
 {
@@ -475,6 +489,8 @@ static void dump_sram(sp_t *sp, char *name, llsim_memory_t *sram)
         fprintf(fp, "%08x\n", llsim_mem_extract(sram, i, 31, 0));
     fclose(fp);
 }
+
+// our code BEGIN
 
 // state machine for DMA
 void dma_ctl(sp_t *sp) {
@@ -532,6 +548,8 @@ void dma_ctl(sp_t *sp) {
 
     }
 }
+
+// our code END
 
 static void sp_ctl(sp_t *sp)
 {
@@ -600,6 +618,8 @@ static void sp_ctl(sp_t *sp)
 
     if (sp->start)
         sprn->fetch0_active = 1;
+
+    // our code BEGIN
 
     // fetch0
     sprn->fetch1_active = 0;
@@ -967,6 +987,8 @@ static void sp_ctl(sp_t *sp)
 
     // run DMA
     dma_ctl(sp);
+
+    // our code END
 }
 
 static void sp_run(llsim_unit_t *unit)
