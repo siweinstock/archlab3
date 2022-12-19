@@ -170,6 +170,8 @@ static char opcode_name[32][4] = {"ADD", "SUB", "LSF", "RSF", "AND", "OR", "XOR"
 #define  IS_COND_BRANCH(opcode) ((opcode) == JLT || (opcode) == JLE || (opcode) == JEQ || (opcode) == JNE)
 #define  IS_UNCOND_BRANCH(opcode) ((opcode) == JIN)
 
+int inst_count; // count number of instructions executed
+
 // HAZARD CHECKING FUNCTIONS
 
 // check for possible hazards in DEC0 stage
@@ -396,6 +398,66 @@ void branch(sp_t *sp) {
         flush(sp, EXEC1, pc);
     }
 
+}
+
+
+// dump command trace contents
+void print_trace(sp_t *sp) {
+    sp_registers_t *spro = sp->spro;
+
+    // print header
+    fprintf(inst_trace_fp, "--- instruction %d (%04x) @ PC %d (%04x) -----------------------------------------------------------\n",
+            inst_count, inst_count, spro->exec1_pc, spro->exec1_pc);
+    fprintf(inst_trace_fp, "pc = %04d, ", spro->exec1_pc);
+    fprintf(inst_trace_fp, "inst = %08x, ", spro->exec1_inst);
+    fprintf(inst_trace_fp, "opcode = %d (%s), ", spro->exec1_opcode, opcode_name[spro->exec1_opcode]);
+    fprintf(inst_trace_fp, "dst = %d, ", spro->exec1_dst);
+    fprintf(inst_trace_fp, "src0 = %d, ", spro->exec1_src0);
+    fprintf(inst_trace_fp, "src1 = %d, ", spro->exec1_src1);
+    fprintf(inst_trace_fp, "immediate = %08x\n", spro->exec1_immediate);
+
+    // print register content
+    fprintf(inst_trace_fp, "r[0] = 00000000 ");
+    fprintf(inst_trace_fp, "r[1] = %08x ", spro->exec1_immediate);
+    for (int i=2; i<8; i++) {
+        fprintf(inst_trace_fp, "r[%d] = %08x ", i, spro->r[i]);
+        if ((i+1) % (8/2) == 0) fprintf(inst_trace_fp, "\n");
+    }
+    fprintf(inst_trace_fp, "\n");
+
+    // print operation summary
+    switch (spro->exec1_opcode) {
+        case ADD:
+        case SUB:
+        case LSF:
+        case RSF:
+        case AND:
+        case OR:
+        case XOR:
+            fprintf(inst_trace_fp, ">>>> EXEC: R[%d] = %d %s %d <<<<\n\n", spro->exec1_dst, spro->exec1_alu0, opcode_name[spro->exec1_opcode], spro->exec1_alu1);
+            break;
+        case LHI:
+            fprintf(inst_trace_fp, ">>>> EXEC: R[%d][31:16] = immediate[15:0] <<<<\n\n", spro->exec1_dst);
+            break;
+        case LD:
+            fprintf(inst_trace_fp, ">>>> EXEC: R[%d] = MEM[%d] = %08x <<<<\n\n", spro->exec1_dst, spro->exec1_alu1, llsim_mem_extract_dataout(sp->sramd, 31, 0));
+            break;
+        case ST:
+            fprintf(inst_trace_fp, ">>>> EXEC: MEM[%d] = R[%d] = %08x <<<<\n\n", spro->exec1_alu1, spro->exec1_src0, spro->exec1_alu0);
+            break;
+        case JLT:
+        case JLE:
+        case JEQ:
+        case JNE:
+            fprintf(inst_trace_fp, ">>>> EXEC: %s %d, %d, %d <<<<\n\n", opcode_name[spro->exec1_opcode], spro->exec1_alu0, spro->exec1_alu1, (spro->exec1_aluout ? spro->exec1_immediate & 0xffff : spro->exec1_pc + 1));
+            break;
+        case JIN:
+            fprintf(inst_trace_fp, ">>>> EXEC: JIN %d <<<<\n\n", spro->exec1_immediate);
+            break;
+        case HLT:
+            fprintf(inst_trace_fp, ">>>> EXEC: HALT at PC %04x<<<<\n", spro->exec1_pc);
+            break;
+    }
 }
 
 
@@ -835,7 +897,13 @@ static void sp_ctl(sp_t *sp)
 
     // exec1
     if (spro->exec1_active) {
+        print_trace(sp);
+        inst_count++;
+
         if (spro->exec1_opcode == HLT) {
+            fprintf(inst_trace_fp, "sim finished at pc %d, %d instructions", spro->exec1_pc, inst_count);
+//            fclose(inst_trace_fp);
+
             llsim_stop();
             dump_sram(sp, "srami_out.txt", sp->srami);
             dump_sram(sp, "sramd_out.txt", sp->sramd);
