@@ -6,6 +6,16 @@
 
 #IncludeRegexTransform: 
 
+/mnt/c/Users/shiw1/CLionProjects/archlab3/llsim.c
+stdlib.h
+-
+stdio.h
+-
+string.h
+-
+llsim.h
+/mnt/c/Users/shiw1/CLionProjects/archlab3/llsim.h
+
 /mnt/c/Users/shiw1/CLionProjects/archlab3/llsim.h
 
 /mnt/c/Users/shiw1/CLionProjects/archlab3/sp.c

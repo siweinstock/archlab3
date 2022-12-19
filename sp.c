@@ -211,7 +211,7 @@ int check_hazard_dec1(sp_t *sp, int src) {
                 return DATA_STALL;
             }
             // if branch and src is r[7] (being overwritten with PC), bypass
-            if (spro->exec1_active && spro->dec1_src0 == 7 && (spro->exec1_opcode == JIN || IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout)) {
+            if (spro->exec1_active && spro->dec1_src0 == 7 && (spro->exec1_opcode == JIN || (IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout))) {
                 return CTRL_HAZARD;
             }
             // if load at EXEC1 into register being read, can bypass
@@ -230,7 +230,7 @@ int check_hazard_dec1(sp_t *sp, int src) {
                 return DATA_STALL;
             }
             // if branch and src is r[7] (being overwritten with PC), bypass
-            if (spro->exec1_active && spro->dec1_src1 == 7 && (spro->exec1_opcode == JIN || IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout)) {
+            if (spro->exec1_active && spro->dec1_src1 == 7 && (spro->exec1_opcode == JIN || (IS_COND_BRANCH(spro->exec1_opcode) && spro->exec1_aluout))) {
                 return CTRL_HAZARD;
             }
             // if load at EXEC1 into register being read, can bypass
@@ -350,7 +350,6 @@ void stall(sp_t *sp, int stage) {
 // flush pipeline and load correct instruction
 void flush(sp_t *sp, int stage, int pc) {
     sp_registers_t *sprn = sp->sprn;
-    sp_registers_t *spro = sp->spro;
 
     switch (stage) {
         // flush pipeline and fetch from PC
@@ -1024,7 +1023,7 @@ static void sp_generate_sram_memory_image(sp_t *sp, char *program_name)
     }
     addr = 0;
     while (addr < SP_SRAM_HEIGHT) {
-        fscanf(fp, "%08x\n", &sp->memory_image[addr]);
+        if (fscanf(fp, "%08x\n", &sp->memory_image[addr]));
         //              printf("addr %x: %08x\n", addr, sp->memory_image[addr]);
         addr++;
         if (feof(fp))
