@@ -1,0 +1,1 @@
+/usr/bin/cc -g   CMakeFiles/archlab3.dir/llsim.c.o CMakeFiles/archlab3.dir/sp.c.o  -o archlab3 

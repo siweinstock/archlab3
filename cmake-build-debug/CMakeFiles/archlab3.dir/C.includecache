@@ -1,0 +1,28 @@
+#IncludeRegexLine: ^[ 	]*[#%][ 	]*(include|import)[ 	]*[<"]([^">]+)([">])
+
+#IncludeRegexScan: ^.*$
+
+#IncludeRegexComplain: ^$
+
+#IncludeRegexTransform: 
+
+/mnt/c/Users/shiw1/CLionProjects/archlab3/llsim.h
+
+/mnt/c/Users/shiw1/CLionProjects/archlab3/sp.c
+stdlib.h
+-
+stdio.h
+-
+string.h
+-
+unistd.h
+-
+sys/types.h
+-
+sys/socket.h
+-
+netinet/in.h
+-
+llsim.h
+/mnt/c/Users/shiw1/CLionProjects/archlab3/llsim.h
+

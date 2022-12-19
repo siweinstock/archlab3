@@ -363,8 +363,8 @@ void flush(sp_t *sp, int stage, int pc) {
 
 }
 
-// branch predictor
-void predict_branch(sp_t *sp) {
+// executes branch operation, updates branch_counter for future predictions
+void branch(sp_t *sp) {
     sp_registers_t *spro = sp->spro;
     sp_registers_t *sprn = sp->sprn;
 
@@ -878,7 +878,7 @@ static void sp_ctl(sp_t *sp)
                 case JEQ:
                 case JNE:
                 case JIN:
-                    predict_branch(sp);
+                    branch(sp);
                     break;
                     // HLT already taken care of in provided code
 
